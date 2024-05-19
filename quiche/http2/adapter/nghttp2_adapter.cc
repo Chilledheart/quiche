@@ -232,30 +232,54 @@ int32_t NgHttp2Adapter::SubmitRequest(
     absl::Span<const Header> headers,
     std::unique_ptr<DataFrameSource> data_source, void* stream_user_data) {
   auto nvs = GetNghttp2Nvs(headers);
+#if NGHTTP2_VERSION_NUM >= 0x013c00
+  std::unique_ptr<nghttp2_data_provider2> provider =
+      MakeDataProvider(data_source.get());
+#else
   std::unique_ptr<nghttp2_data_provider> provider =
       MakeDataProvider(data_source.get());
+#endif
 
-  int32_t stream_id =
+#if NGHTTP2_VERSION_NUM >= 0x013c00
+  int32_t result =
+      nghttp2_submit_request2(session_->raw_ptr(), nullptr, nvs.data(),
+                              nvs.size(), provider.get(), stream_user_data);
+#else
+  int32_t result =
       nghttp2_submit_request(session_->raw_ptr(), nullptr, nvs.data(),
                              nvs.size(), provider.get(), stream_user_data);
-  sources_.emplace(stream_id, std::move(data_source));
+#endif
   QUICHE_VLOG(1) << "Submitted request with " << nvs.size()
                  << " request headers and user data " << stream_user_data
-                 << "; resulted in stream " << stream_id;
-  return stream_id;
+                 << "; resulted in stream " << result;
+  if (result < 0) {
+    return result;
+  }
+  sources_.emplace(result, std::move(data_source));
+  return result;
 }
 
 int NgHttp2Adapter::SubmitResponse(
     Http2StreamId stream_id, absl::Span<const Header> headers,
     std::unique_ptr<DataFrameSource> data_source) {
   auto nvs = GetNghttp2Nvs(headers);
+#if NGHTTP2_VERSION_NUM >= 0x013c00
+  std::unique_ptr<nghttp2_data_provider2> provider =
+      MakeDataProvider(data_source.get());
+#else
   std::unique_ptr<nghttp2_data_provider> provider =
       MakeDataProvider(data_source.get());
+#endif
 
   sources_.emplace(stream_id, std::move(data_source));
 
+#if NGHTTP2_VERSION_NUM >= 0x013c00
+  int result = nghttp2_submit_response2(session_->raw_ptr(), stream_id,
+                                        nvs.data(), nvs.size(), provider.get());
+#else
   int result = nghttp2_submit_response(session_->raw_ptr(), stream_id,
                                        nvs.data(), nvs.size(), provider.get());
+#endif
   QUICHE_VLOG(1) << "Submitted response with " << nvs.size()
                  << " response headers; result = " << result;
   return result;
